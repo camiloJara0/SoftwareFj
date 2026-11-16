@@ -3,8 +3,9 @@ Módulo encargado de gestionar los clientes
 del sistema Software FJ.
 """
 
+from bitacora import registrar_error
 from entidades import Entidad
-from excepciones import DatosInvalidosError
+from excepciones import DatosInvalidosError, SoftwareFJError
 
 
 class Cliente(Entidad):
@@ -13,17 +14,31 @@ class Cliente(Entidad):
     """
 
     def __init__(self, nombre, documento, correo, telefono):
-        # Inicializamos la clase padre.
-        super().__init__()
+        try: 
+            # Inicializamos la clase padre.
+            super().__init__()
 
-        # Encapsulamos los datos del cliente.
-        self.__nombre = nombre.strip()
-        self.__documento = documento.strip()
-        self.__correo = correo.strip()
-        self.__telefono = str(telefono).strip()
+            # Encapsulamos los datos del cliente.
+            self.__nombre = nombre.strip()
+            self.__documento = documento.strip()
+            self.__correo = correo.strip()
+            self.__telefono = str(telefono).strip()
 
-        # Validamos la información ingresada.
-        self.validar()
+            # Validamos la información ingresada.
+            self.validar()
+        
+        except SoftwareFJError as error:
+            registrar_error(f"Cliente inválido: {error}")
+            raise
+        
+        except Exception as error:
+            registrar_error(
+                f"Error inesperado al crear el cliente: "
+                f"{type(error).__name__}: {error}"
+            )
+            raise DatosInvalidosError(
+                "No fue posible contruir el cliente con los datos recibidos."
+            ) from error
 
     @property
     def nombre(self):
@@ -70,6 +85,13 @@ class Cliente(Entidad):
             )
 
         return True
+    
+    def __eq__(self, otro):
+        """Dos clientes son iguales si comparten documento."""
+        if not isinstance(otro, Cliente):
+            return NotImplemented
+        
+        return self.__documento == otro.documento
 
     def __str__(self):
         """Devuelve una descripción del cliente."""

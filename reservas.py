@@ -3,38 +3,78 @@ Módulo encargado de gestionar las reservas
 del sistema Software FJ.
 """
 
+from datetime import datetime
+from math import isfinite
+
+from bitacora import registrar_error, registrar_evento
 from entidades import Entidad
 from clientes import Cliente
 from servicios import Servicio
 
 from excepciones import (
+    CalculoInvalidoError,
     DatosInvalidosError,
     ClienteNoEncontradoError,
     ServicioNoDisponibleError,
     ReservaInvalidaError,
-    OperacionNoPermitidaError
+    OperacionNoPermitidaError,
+    SoftwareFJError
 )
 
 
 class Reserva(Entidad):
     """Representa una reserva realizada por un cliente."""
 
-    def __init__(self, cliente, servicio, duracion):
-        super().__init__()
-
-        self.__cliente = cliente
-        self.__servicio = servicio
-
+    def __init__(self, cliente, servicio, duracion, porcentaje_impuesto=0, porcentaje_descuento=0):
         try:
-            self.__duracion = float(duracion)
-        except (ValueError, TypeError) as error:
+            
+            super().__init__()
+            
+            self.__cliente = cliente
+            self.__servicio = servicio
+
+            self.__duracion = self.convertir_numero(
+                duracion, "La duración"
+            )
+            self.__impuesto = self.convertir_numero(
+                porcentaje_impuesto, "El porcentaje de impuesto"
+            )
+            self.__descuento = self.convertir_numero(
+                porcentaje_descuento, "El porcentaje de descuento"
+            )
+
+            self.__estado = "Pendiente"
+            self.__costo_final = None
+            self.__fecha_creacion = datetime.now()
+
+            self.validar()
+        
+        except SoftwareFJError as error:
+            registrar_error(f"Reserva inválida: {error}")
+            raise
+        
+        except Exception as error:
+            registrar_error(
+                f"Error inesperado al crear la reserva: "
+                f"{type(error).__name__}: {error}"
+            )
             raise DatosInvalidosError(
-                "La duración debe ser un valor numérico."
+                "No fue posible contruir la reserva con los datos recibidos."
             ) from error
 
-        self.__estado = "Pendiente"
+    @staticmethod
+    def convertir_numero(valor, etiqueta):
+        """Convierte un valor numérico y encadena el error original."""
 
-        self.validar()
+        if valor is None:
+            raise DatosInvalidosError(f"{etiqueta} es obligatorio.")
+
+        try:
+            return float(valor)
+        except (ValueError, TypeError) as error:
+            raise DatosInvalidosError(
+                f"{etiqueta} debe ser un valor numérico."
+            ) from error
 
     @property
     def cliente(self):
@@ -49,8 +89,24 @@ class Reserva(Entidad):
         return self.__duracion
 
     @property
+    def porcentaje_impuesto(self):
+        return self.__impuesto
+
+    @property
+    def porcentaje_descuento(self):
+        return self.__descuento
+    
+    @property
     def estado(self):
         return self.__estado
+    
+    @property
+    def costo_final(self):
+        return self.__costo_final
+
+    @property
+    def fecha_creacion(self):
+        return self.__fecha_creacion
 
     def validar(self):
         """Valida la información necesaria para crear una reserva."""
@@ -69,6 +125,16 @@ class Reserva(Entidad):
             raise DatosInvalidosError(
                 "La duración de la reserva debe ser mayor que cero."
             )
+            
+        if not 0 <= self.__impuesto <= 100:
+            raise CalculoInvalidoError(
+                "El porcentaje de impuesto debe estar entre 0 y 100."
+            )
+
+        if not 0 <= self.__descuento <= 100:
+            raise CalculoInvalidoError(
+                "El porcentaje de descuento debe estar entre 0 y 100."
+            )
 
         if not self.__servicio.disponible:
             raise ServicioNoDisponibleError(
@@ -80,55 +146,136 @@ class Reserva(Entidad):
     def confirmar(self):
         """Confirma una reserva pendiente."""
 
-        if self.__estado != "Pendiente":
-            raise OperacionNoPermitidaError(
-                "Solo se pueden confirmar reservas pendientes."
+        try:
+            if self.__estado != "Pendiente":
+                raise OperacionNoPermitidaError(
+                    "Solo se pueden confirmar reservas pendientes."
+                )
+
+            if not self.__servicio.disponible:
+                raise ServicioNoDisponibleError(
+                    "No se puede confirmar: el servicio no está disponible."
+                )
+
+        except SoftwareFJError as error:
+            registrar_error(
+                f"Confirmación rechazada ({self.id[:8]}): {error}"
             )
-
-        if not self.__servicio.disponible:
-            raise ServicioNoDisponibleError(
-                "No se puede confirmar: el servicio no está disponible."
+            raise
+        
+        else:
+            self.__estado = "Confirmada"
+            registrar_evento(
+                f"Reserva {self.id[:8]} confirmada "
+                f"para {self.__cliente.nombre}."
             )
-
-        self.__estado = "Confirmada"
-
-        return self.__estado
+            return self.__estado
+        
+        finally:
+            registrar_evento(
+                f"Intento de confirmación de la reserva "
+                f"{self.id[:8]} finalizado (estado: {self.__estado})."
+            )
 
     def cancelar(self):
         """Cancela una reserva pendiente o confirmada."""
 
-        if self.__estado not in ("Pendiente", "Confirmada"):
-            raise OperacionNoPermitidaError(
-                "No se puede cancelar una reserva que ya fue procesada o cancelada."
+        try:
+            if self.__estado not in ("Pendiente", "Confirmada"):
+                raise OperacionNoPermitidaError(
+                    "No se puede cancelar una reserva que ya fue procesada o cancelada."
+                )
+                
+        except SoftwareFJError as error:
+            registrar_error(
+                f"Cancelación rechazada ({self.id[:8]}): {error}"
             )
+            raise
+        
+        else:
+            self.__estado = "Cancelada"
+            registrar_evento(
+                f"Reserva {self.id[:8]} cancelada "
+                f"para {self.__cliente.nombre}."
+            )
+            return self.__estado
 
-        self.__estado = "Cancelada"
-
-        return self.__estado
+        finally:
+            registrar_evento(
+                f"Intento de cancelación de la reserva "
+                f"{self.id[:8]} finalizado (estado: {self.__estado})."
+            )
 
     def procesar(self):
         """Procesa una reserva confirmada y calcula su costo."""
 
-        if self.__estado != "Confirmada":
-            raise OperacionNoPermitidaError(
-                "La reserva debe estar confirmada antes de procesarse."
+        try:
+            
+            if self.__estado != "Confirmada":
+                raise OperacionNoPermitidaError(
+                    "La reserva debe estar confirmada antes de procesarse."
+                )
+                
+            if not self.__servicio.disponible:
+                raise ServicioNoDisponibleError(
+                    "No se puede procesar: el servicio no está disponible."
+                )
+
+            costo_total = self.__servicio.calcular_costo(
+                self.__duracion,
+                self.__impuesto,
+                self.__descuento
             )
+            
+            if not isfinite(costo_total) or costo_total < 0:
+                raise CalculoInvalidoError(
+                    "El costo calculado para la reserva es inconsistente."
+                )
 
-        costo_total = self.__servicio.calcular_costo(
-            self.__duracion
-        )
-
-        self.__estado = "Procesada"
-
-        return costo_total
+        except SoftwareFJError as error:
+            registrar_error(
+                f"Procesamiento rechazado ({self.id[:8]}): {error}"
+            )
+            raise
+        
+        except Exception as error:
+            registrar_error(
+                f"Error inesperado al procesar la reserva {self.id[:8]}: "
+                f"{type(error).__name__}: {error}"
+            )
+            raise CalculoInvalidoError(
+                "No fue posible procesar la reserva."
+            ) from error
+        
+        else:    
+            self.__estado = "Procesada"
+            self.__costo_final = costo_total
+            registrar_evento(
+                f"Reserva {self.id[:8]} procesada. "
+                f"Costo total: ${costo_total:,.2f}"
+            )
+            return costo_total
+        
+        finally:
+            registrar_evento(
+                f"Intento de procesamiento de la reserva "
+                f"{self.id[:8]} finalizado (estado: {self.__estado})."
+            )
 
     def __str__(self):
         """Devuelve un resumen de la reserva."""
 
-        return (
-            f"Reserva: {self.id} | "
+        texto = (
+            f"Reserva: {self.id[:8]} | "
             f"Cliente: {self.__cliente.nombre} | "
             f"Servicio: {self.__servicio.nombre} | "
-            f"Duración: {self.__duracion} | "
+            f"Duración: {self.__duracion:g} | "
+            f"Impuesto: {self.__impuesto:g}% | "
+            f"Descuento: {self.__descuento:g}% | "
             f"Estado: {self.__estado}"
         )
+
+        if self.__costo_final is not None:
+            texto += f" | Costo: ${self.__costo_final:,.2f}"
+
+        return texto

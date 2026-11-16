@@ -9,6 +9,9 @@ No utiliza bases de datos ni persistencia de información.
 
 from math import isfinite
 
+from bitacora import registrar_error, registrar_error_detallado, registrar_evento
+from excepciones import DatosInvalidosError, SoftwareFJError
+from sistema import SistemaFJ, etiqueta_servicio
 from clientes import Cliente
 from servicios import (
     ReservaSala,
@@ -23,6 +26,7 @@ from excepciones import SoftwareFJError, DatosInvalidosError
 # LISTAS EN MEMORIA
 # =====================================================
 
+sistema = SistemaFJ()
 clientes = []
 servicios = []
 reservas = []
@@ -104,20 +108,12 @@ def registrar_cliente():
     correo = pedir_texto("Correo electrónico: ")
     telefono = pedir_texto("Teléfono: ")
 
-    cliente = Cliente(
+    cliente = sistema.registrar_cliente(
         nombre,
         documento,
         correo,
         telefono,
     )
-
-    for registrado in clientes:
-        if registrado.documento == cliente.documento:
-            raise DatosInvalidosError(
-                "Ya existe un cliente con ese documento."
-            )
-
-    clientes.append(cliente)
 
     print("\nCliente registrado correctamente.")
     print(cliente)
@@ -149,56 +145,37 @@ def registrar_servicio():
     opcion = pedir_entero("\nSeleccione el tipo de servicio: ")
 
     if opcion not in (1, 2, 3):
-        print("Tipo de servicio no válido.")
-        return
+        raise DatosInvalidosError(
+            "El tipo de servicio seleccionado no es válido."
+        )
+
+    tipo = {1: "sala", 2: "equipo", 3: "asesoria"}[opcion]
 
     codigo = pedir_texto("Código del servicio: ")
-
-    for servicio in servicios:
-        if servicio.codigo.upper() == codigo.upper():
-            raise DatosInvalidosError(
-                "Ya existe un servicio con ese código."
-            )
-
     nombre = pedir_texto("Nombre del servicio: ")
     descripcion = pedir_texto("Descripción: ")
     precio = pedir_decimal("Precio base: ")
     disponible = pedir_si_no("¿El servicio está disponible? (S/N): ")
 
     if opcion == 1:
-        capacidad = pedir_entero("Capacidad de la sala: ")
-        servicio = ReservaSala(
-            codigo,
-            nombre,
-            descripcion,
-            precio,
-            capacidad,
-            disponible,
-        )
+        dato_adicional = pedir_entero("Capacidad de la sala: ")
+
 
     elif opcion == 2:
-        tipo_equipo = pedir_texto("Tipo de equipo: ")
-        servicio = AlquilerEquipo(
-            codigo,
-            nombre,
-            descripcion,
-            precio,
-            tipo_equipo,
-            disponible,
-        )
+        dato_adicional = pedir_texto("Tipo de equipo: ")
 
     else:
-        especialidad = pedir_texto("Especialidad: ")
-        servicio = AsesoriaEspecializada(
-            codigo,
-            nombre,
-            descripcion,
-            precio,
-            especialidad,
-            disponible,
-        )
+        dato_adicional = pedir_texto("Especialidad: ")
 
-    servicios.append(servicio)
+    servicio = sistema.registrar_servicio(
+        tipo,
+        codigo,
+        nombre,
+        descripcion,
+        precio,
+        disponible,
+        dato_adicional,
+    )
 
     print("\nServicio registrado correctamente.")
     print(servicio.describir())
@@ -216,6 +193,7 @@ def mostrar_servicios():
 
         print(f"\nServicio {indice}")
         print(f"Código: {servicio.codigo}")
+        print(f"Tipo: {etiqueta_servicio(servicio)}")
         print(servicio.describir())
         print(f"Descripción: {servicio.descripcion}")
         print(f"Estado: {estado}")
@@ -228,34 +206,36 @@ def mostrar_servicios():
 def crear_reserva():
     mostrar_titulo("CREACIÓN DE RESERVAS")
 
-    if not clientes:
+    if not sistema.clientes:
         print("Primero debe registrar al menos un cliente.")
         return
 
-    servicios_disponibles = [s for s in servicios if s.disponible]
-
-    if not servicios_disponibles:
-        print("No hay servicios disponibles para reservar.")
+    if not sistema.servicios:
+        print("Primero debe registrar al menos un servicio.")
         return
 
     print("\nCLIENTES REGISTRADOS")
-    cliente = seleccionar_elemento(clientes, "clientes")
+    cliente = seleccionar_elemento(list(sistema.clientes), "clientes")
     if cliente is None:
         return
 
     print("\nSERVICIOS DISPONIBLES")
-    servicio = seleccionar_elemento(servicios_disponibles, "servicios")
+    servicio = seleccionar_elemento(list(sistema.servicios), "servicios")
     if servicio is None:
         return
 
     duracion = pedir_decimal(
         "\nIngrese la duración (horas o días según el servicio): "
     )
+    impuesto = pedir_decimal("Porcentaje de impuesto (0-100): ")
+    descuento = pedir_decimal("Porcentaje de descuento (0-100): ")
 
     reserva = Reserva(
         cliente,
         servicio,
         duracion,
+        impuesto,
+        descuento
     )
 
     reservas.append(reserva)
@@ -267,7 +247,7 @@ def crear_reserva():
 def mostrar_reservas():
     mostrar_titulo("LISTADO DE RESERVAS")
 
-    if not reservas:
+    if not sistema.reservas:
         print("No hay reservas registradas.")
         return
 
@@ -279,11 +259,11 @@ def mostrar_reservas():
 def gestionar_reserva():
     mostrar_titulo("GESTIÓN DE RESERVAS")
 
-    if not reservas:
+    if not sistema.reservas:
         print("No hay reservas para gestionar.")
         return
 
-    reserva = seleccionar_elemento(reservas, "reservas")
+    reserva = seleccionar_elemento(sistema.reservas, "reservas")
     if reserva is None:
         return
 
@@ -296,23 +276,23 @@ def gestionar_reserva():
     opcion = pedir_entero("\nSeleccione una opción: ")
 
     if opcion == 1:
-        estado = reserva.confirmar()
+        estado = sistema.confirmar_reserva()
         print(f"\nReserva confirmada. Estado: {estado}")
 
     elif opcion == 2:
-        costo = reserva.procesar()
+        costo = sistema.procesar_reserva()
         print("\nReserva procesada correctamente.")
         print(f"Costo total: ${costo:,.2f}")
 
     elif opcion == 3:
-        estado = reserva.cancelar()
+        estado = sistema.cancelar_reserva()
         print(f"\nReserva cancelada. Estado: {estado}")
 
     elif opcion == 4:
         return
 
     else:
-        print("Opción no válida.")
+        raise DatosInvalidosError("La operación seleccionada no es válida.")
 
     print("\nEstado actual de la reserva:")
     print(reserva)
@@ -363,12 +343,22 @@ def menu_principal():
             print(f"\nOperación rechazada: {error}")
 
         except Exception as error:
+            registrar_error_detallado(
+                "Error inesperado en el menú del sistema", error
+            )
             print("\nSe presentó un error inesperado.")
             print("El sistema continuará funcionando.")
             print(f"Detalle técnico: {type(error).__name__}: {error}")
 
-        input("\nPresione ENTER para continuar...")
-
+        else:
+            if opcion in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+                registrar_evento(
+                    f"Operación del menú '{opcion}' ejecutada sin errores."
+                )
+                
+        finally:
+            if opcion != "0":
+                input("\nPresione ENTER para continuar...")
 
 # =====================================================
 # PUNTO DE ENTRADA DEL PROGRAMA
